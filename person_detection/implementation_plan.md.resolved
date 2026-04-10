@@ -1,0 +1,67 @@
+# Webcam PC → ESP32 via Port Série
+
+Le projet `person_detection` tourne sur ESP32 et utilise un modèle TFLite pour détecter des personnes dans des images 96×96 en niveaux de gris. Le mode `CLI_ONLY_INFERENCE` est déjà activé, ce qui désactive la caméra matérielle et expose un CLI via UART.
+
+**Objectif** : Permettre de capturer des images depuis la webcam du PC et de les envoyer à l'ESP32 via le port série pour que l'ESP32 exécute l'inférence.
+
+## Proposed Changes
+
+### Côté ESP32 — Nouvelle commande série `detect_serial`
+
+#### [MODIFY] [esp_cli.c](file:///c:/Users/alexa/OneDrive/Documents/Arduino/person_detection/esp_cli.c)
+
+Ajouter une nouvelle commande CLI `detect_serial` qui :
+1. Envoie un marqueur `READY\n` sur le port série pour signaler au PC qu'il est prêt
+2. Attend de recevoir exactement **9216 octets** (96 × 96 × 1 = image grayscale complète) via UART
+3. Appelle [run_inference()](file:///c:/Users/alexa/OneDrive/Documents/Arduino/person_detection/person_detection.ino#167-215) sur le buffer reçu
+4. Boucle en continu (envoie `READY` à nouveau) jusqu'à un signal d'arrêt ou déconnexion
+
+Protocole série :
+```
+ESP32 → PC : "READY\n"
+PC → ESP32 : [9216 octets bruts de l'image]
+ESP32 : exécute l'inférence, affiche le résultat
+ESP32 → PC : "RESULT:<person_score>:<no_person_score>\n"
+(boucle)
+```
+
+Enregistrer cette commande dans le tableau `diag_cmds`.
+
+---
+
+### Côté PC — Script Python de capture webcam
+
+#### [NEW] [webcam_sender.py](file:///c:/Users/alexa/OneDrive/Documents/Arduino/person_detection/webcam_sender.py)
+
+Script Python qui :
+1. Ouvre la webcam via **OpenCV** (`cv2.VideoCapture(0)`)
+2. Ouvre la connexion série via **pyserial** (port configurable, baudrate 115200)
+3. En boucle :
+   - Capture un frame de la webcam
+   - Convertit en niveaux de gris
+   - Redimensionne en **96×96**
+   - Attend le signal `READY` de l'ESP32
+   - Envoie les 9216 octets bruts via série
+   - Attend et affiche le résultat `RESULT:...`
+   - Affiche aussi la preview webcam avec le score superposé via OpenCV
+4. Quitte avec la touche `q`
+
+Usage : `python webcam_sender.py --port COM3 --baud 115200`
+
+## Verification Plan
+
+### Test manuel (à effectuer par l'utilisateur)
+
+1. **Flasher** le code modifié sur l'ESP32
+2. Connecter l'ESP32 au PC via USB
+3. Identifier le port COM de l'ESP32 (ex: `COM3`)
+4. Installer les dépendances Python : `pip install opencv-python pyserial`
+5. Lancer le script : `python webcam_sender.py --port COM3`
+6. Vérifier que :
+   - La fenêtre webcam s'ouvre
+   - Les scores de détection s'affichent dans le terminal et sur la fenêtre
+   - L'ESP32 répond correctement à chaque frame
+
+> [!IMPORTANT]
+> Le baudrate doit être identique côté Python et côté ESP32. Nous utilisons 115200 par défaut.
+> Le port COM doit être ajusté selon votre configuration (vérifiez dans le Gestionnaire de périphériques Windows).
